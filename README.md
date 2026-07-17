@@ -4,9 +4,23 @@ A small local GUI tool for extracting image hex colors, comparing two images, bu
 
 ## Run
 
+Clone the repository and enter its root directory:
+
+```bash
+git clone https://github.com/AllHailSeizure/Imageination.git
+cd Imageination
+```
+
+On Windows PowerShell:
+
 ```powershell
-cd D:\Libraries\Imageination
 python .\run_imageination.py
+```
+
+On macOS or Linux:
+
+```bash
+python3 ./run_imageination.py
 ```
 
 ## Current workflow
@@ -33,7 +47,8 @@ python .\run_imageination.py
 
 ## Test
 
+From the repository root:
+
 ```powershell
-cd D:\Libraries\Imageination
 python -m pytest tests
 ```
