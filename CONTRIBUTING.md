@@ -55,7 +55,10 @@ Labels aren't auto-created by tooling; create them in the repo's GitHub UI (Issu
 **Type**
 - `bug` — something isn't working
 - `feature` — new functionality
-- `chore` — tooling, docs, refactors with no behavior change
+- `docs` — documentation-only changes
+- `refactor` — code restructuring with no behavior change
+- `tooling` — CI, build config, dependencies, lint/format setup
+- `test` — test-only changes
 
 **Priority**
 - `priority: high`
