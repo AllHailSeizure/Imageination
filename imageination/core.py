@@ -45,11 +45,7 @@ def hex_to_rgb(value: str) -> tuple[int, int, int]:
 
 def extract_hex_values(image_path: str | Path, include_transparent: bool = False) -> list[str]:
     with Image.open(image_path).convert("RGBA") as image:
-        colors = {
-            rgb_to_hex((r, g, b))
-            for r, g, b, a in image_data(image)
-            if include_transparent or a > 0
-        }
+        colors = {rgb_to_hex((r, g, b)) for r, g, b, a in image_data(image) if include_transparent or a > 0}
     return sorted(colors)
 
 

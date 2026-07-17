@@ -5,8 +5,8 @@ from PIL import Image
 from imageination.core import (
     apply_color_map,
     apply_color_map_batch,
-    build_color_map,
     build_cell_color_map,
+    build_color_map,
     extract_hex_values,
     image_data,
     parse_manual_map,
@@ -52,16 +52,28 @@ def test_build_cell_color_map_compares_dominant_cell_colors(tmp_path):
     save_rgba(
         source_path,
         [
-            (255, 0, 0, 255), (255, 0, 0, 255), (0, 0, 255, 255), (0, 0, 255, 255),
-            (255, 0, 0, 255), (1, 1, 1, 255), (0, 0, 255, 255), (2, 2, 2, 255),
+            (255, 0, 0, 255),
+            (255, 0, 0, 255),
+            (0, 0, 255, 255),
+            (0, 0, 255, 255),
+            (255, 0, 0, 255),
+            (1, 1, 1, 255),
+            (0, 0, 255, 255),
+            (2, 2, 2, 255),
         ],
         size=(4, 2),
     )
     save_rgba(
         target_path,
         [
-            (0, 255, 0, 255), (0, 255, 0, 255), (9, 9, 9, 255), (9, 9, 9, 255),
-            (0, 255, 0, 255), (3, 3, 3, 255), (9, 9, 9, 255), (4, 4, 4, 255),
+            (0, 255, 0, 255),
+            (0, 255, 0, 255),
+            (9, 9, 9, 255),
+            (9, 9, 9, 255),
+            (0, 255, 0, 255),
+            (3, 3, 3, 255),
+            (9, 9, 9, 255),
+            (4, 4, 4, 255),
         ],
         size=(4, 2),
     )

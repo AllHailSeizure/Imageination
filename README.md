@@ -37,3 +37,7 @@ python .\run_imageination.py
 cd D:\Libraries\Imageination
 python -m pytest tests
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, lint/format, and PR conventions.

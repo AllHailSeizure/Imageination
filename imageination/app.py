@@ -18,7 +18,6 @@ from imageination.core import (
     parse_manual_map,
 )
 
-
 IMAGE_TYPES = [
     ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tif *.tiff"),
     ("All files", "*.*"),
@@ -317,7 +316,9 @@ class ImageinationApp(tk.Tk):
         self.status_var.set(f"Batch exported {len(outputs)} image(s) to {output_dir}.")
 
     def load_map(self):
-        path = filedialog.askopenfilename(title="Load transform map", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        path = filedialog.askopenfilename(
+            title="Load transform map", filetypes=[("JSON", "*.json"), ("All files", "*.*")]
+        )
         if not path:
             return
         with open(path, "r", encoding="utf-8") as file:
