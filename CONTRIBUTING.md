@@ -64,9 +64,3 @@ Labels aren't auto-created by tooling; create them in the repo's GitHub UI (Issu
 - `priority: high`
 - `priority: medium`
 - `priority: low`
-
-**Status**
-- `status: triage` — needs a decision before work starts
-- `status: ready` — scoped and ready to pick up
-- `status: in-progress`
-- `status: blocked`
