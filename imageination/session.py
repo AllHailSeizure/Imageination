@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 from imageination.engine import apply_recipe
-from imageination.recipe import Recipe
+from imageination.recipe import Operation, Recipe
 
 
 @dataclass
@@ -23,6 +23,22 @@ class RecipeSession:
 
     def add_folder(self, folder: Path) -> None:
         self.add_files(sorted(path for path in Path(folder).iterdir() if path.is_file() and path.suffix.lower() == ".png"))
+
+    def replace_recipe(self, recipe: Recipe) -> None:
+        self.recipe = recipe
+
+    def replace_operation(self, index: int, operation: Operation) -> None:
+        operations = list(self.recipe.operations)
+        operations[index] = operation
+        self.recipe = Recipe(tuple(operations))
+
+    def move_operation(self, index: int, offset: int) -> None:
+        target = index + offset
+        if not 0 <= index < len(self.recipe.operations) or not 0 <= target < len(self.recipe.operations):
+            return
+        operations = list(self.recipe.operations)
+        operations[index], operations[target] = operations[target], operations[index]
+        self.recipe = Recipe(tuple(operations))
 
     def preview(self) -> Image.Image | None:
         if self.selected_index is None:

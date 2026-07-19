@@ -1,28 +1,18 @@
 from __future__ import annotations
 
-import json
-import tempfile
-import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from imageination.core import (
-    apply_color_map,
-    apply_color_map_batch,
-    build_cell_color_map,
-    build_color_map,
-    extract_hex_values,
-    flatten_suggested_map,
-    parse_manual_map,
-)
+from imageination.engine import export_recipe, preflight, suggest_mappings
+from imageination.recipe import LayerOperation, Recipe, RecolorOperation, layer_from_png, recipe_from_json
+from imageination.session import RecipeSession
 
 
-IMAGE_TYPES = [
-    ("Images", "*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tif *.tiff"),
-    ("All files", "*.*"),
-]
+PNG_TYPES = [("PNG images", "*.png")]
 
 
 class ImageinationApp(tk.Tk):
@@ -30,341 +20,270 @@ class ImageinationApp(tk.Tk):
         super().__init__()
         self.title("Imageination")
         self.geometry("1120x760")
-        self.minsize(940, 640)
-
-        self.source_path: Path | None = None
-        self.target_path: Path | None = None
-        self.preview_image: ImageTk.PhotoImage | None = None
-        self.last_output_path: Path | None = None
-
-        self.status_var = tk.StringVar(value="Pick a source image to begin.")
-        self.source_var = tk.StringVar(value="No source image selected")
-        self.target_var = tk.StringVar(value="No comparison image selected")
-        self.frame_width_var = tk.StringVar(value="16")
-        self.frame_height_var = tk.StringVar(value="16")
-        self.use_magick_var = tk.BooleanVar(value=True)
-
+        self.minsize(900, 620)
+        self.session = RecipeSession()
+        self.before_image: ImageTk.PhotoImage | None = None
+        self.after_image: ImageTk.PhotoImage | None = None
+        self.status_var = tk.StringVar(value="Add PNG images to begin.")
+        self.direction_var = tk.StringVar(value="above")
         self._build_ui()
 
     def _build_ui(self):
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-
         toolbar = ttk.Frame(self, padding=8)
-        toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(1, weight=1)
-        toolbar.columnconfigure(3, weight=1)
+        toolbar.pack(fill="x")
+        for label, command in (("Add PNGs", self.add_files), ("Add Folder", self.add_folder), ("Load Recipe", self.load_recipe), ("Export Results", self.export_results)):
+            ttk.Button(toolbar, text=label, command=command).pack(side="left", padx=(0, 6))
 
-        ttk.Button(toolbar, text="Pick Source", command=self.pick_source).grid(row=0, column=0, padx=(0, 6))
-        ttk.Label(toolbar, textvariable=self.source_var).grid(row=0, column=1, sticky="ew", padx=(0, 12))
-        ttk.Button(toolbar, text="Pick Comparison", command=self.pick_target).grid(row=0, column=2, padx=(0, 6))
-        ttk.Label(toolbar, textvariable=self.target_var).grid(row=0, column=3, sticky="ew")
+        body = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        inputs = ttk.Frame(body, padding=8)
+        preview = ttk.Frame(body, padding=8)
+        recipe = ttk.Frame(body, padding=8)
+        body.add(inputs, weight=1)
+        body.add(preview, weight=3)
+        body.add(recipe, weight=1)
+        self._build_inputs(inputs)
+        self._build_preview(preview)
+        self._build_recipe(recipe)
+        ttk.Label(self, textvariable=self.status_var, anchor="w", padding=(8, 0, 8, 8)).pack(fill="x")
 
-        panes = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        panes.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+    def _build_inputs(self, parent):
+        ttk.Label(parent, text="Input images").pack(anchor="w")
+        self.input_list = tk.Listbox(parent, exportselection=False)
+        self.input_list.pack(fill="both", expand=True, pady=(6, 0))
+        self.input_list.bind("<<ListboxSelect>>", self.select_input)
 
-        left = ttk.Frame(panes, padding=8)
-        middle = ttk.Frame(panes, padding=8)
-        right = ttk.Frame(panes, padding=8)
-        panes.add(left, weight=1)
-        panes.add(middle, weight=2)
-        panes.add(right, weight=1)
-
-        self._build_color_panel(left)
-        self._build_map_panel(middle)
-        self._build_preview_panel(right)
-
-        status = ttk.Label(self, textvariable=self.status_var, padding=(8, 0, 8, 8), anchor="w")
-        status.grid(row=2, column=0, sticky="ew")
-
-    def _build_color_panel(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
-        parent.rowconfigure(3, weight=1)
-
-        ttk.Label(parent, text="Source Hex Values").grid(row=0, column=0, sticky="w")
-        self.source_colors = tk.Listbox(parent, height=12, exportselection=False)
-        self.source_colors.grid(row=1, column=0, sticky="nsew", pady=(4, 12))
-        self.source_colors.bind("<Double-Button-1>", lambda _event: self.insert_selected_source())
-
-        ttk.Label(parent, text="Comparison Hex Values").grid(row=2, column=0, sticky="w")
-        self.target_colors = tk.Listbox(parent, height=12, exportselection=False)
-        self.target_colors.grid(row=3, column=0, sticky="nsew", pady=(4, 8))
-        self.target_colors.bind("<Double-Button-1>", lambda _event: self.insert_selected_target())
-
-        ttk.Label(parent, text="Future: layering, frame batch tools, nudging").grid(row=4, column=0, sticky="w")
-
-    def _build_map_panel(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(3, weight=1)
-
+    def _build_preview(self, parent):
+        ttk.Label(parent, text="Preview").pack(anchor="w")
+        frames = ttk.Frame(parent)
+        frames.pack(fill="both", expand=True, pady=8)
+        for label in ("Before", "After"):
+            column = ttk.Frame(frames)
+            column.pack(side="left", fill="both", expand=True, padx=5)
+            ttk.Label(column, text=label).pack()
+            image_label = ttk.Label(column, anchor="center")
+            image_label.pack(fill="both", expand=True)
+            if label == "Before":
+                self.before_label = image_label
+            else:
+                self.after_label = image_label
         controls = ttk.Frame(parent)
-        controls.grid(row=0, column=0, sticky="ew")
-        for index in range(7):
-            controls.columnconfigure(index, weight=0)
-        controls.columnconfigure(6, weight=1)
+        controls.pack()
+        ttk.Button(controls, text="← Previous", command=lambda: self.change_input(-1)).pack(side="left", padx=3)
+        ttk.Button(controls, text="Next →", command=lambda: self.change_input(1)).pack(side="left", padx=3)
 
-        ttk.Button(controls, text="Compare Pixels", command=self.compare_pixels).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(controls, text="Compare Cells", command=self.compare_cells).grid(row=0, column=1, padx=(0, 10))
-        ttk.Label(controls, text="Frame").grid(row=0, column=2, padx=(0, 4))
-        ttk.Entry(controls, textvariable=self.frame_width_var, width=6).grid(row=0, column=3)
-        ttk.Label(controls, text="x").grid(row=0, column=4, padx=2)
-        ttk.Entry(controls, textvariable=self.frame_height_var, width=6).grid(row=0, column=5, padx=(0, 12))
-        ttk.Button(controls, text="Apply Manual Text", command=self.apply_manual_text).grid(row=0, column=6, sticky="w")
+    def _build_recipe(self, parent):
+        ttk.Label(parent, text="Recipe · top applied last").pack(anchor="w")
+        self.recipe_list = tk.Listbox(parent, exportselection=False)
+        self.recipe_list.pack(fill="both", expand=True, pady=6)
+        self.recipe_list.bind("<<ListboxSelect>>", self.select_operation)
+        buttons = ttk.Frame(parent)
+        buttons.pack(fill="x")
+        for label, command in (("+ Recolor", self.add_recolor), ("+ Layer", self.add_layer), ("Up", lambda: self.move_operation(1)), ("Down", lambda: self.move_operation(-1)), ("Enable/Disable", self.toggle_operation), ("Remove", self.remove_operation)):
+            ttk.Button(buttons, text=label, command=command).pack(fill="x", pady=1)
+        self.editor = ttk.LabelFrame(parent, text="Selected operation", padding=8)
+        self.editor.pack(fill="x", pady=(8, 0))
 
-        columns = ("source", "target", "count")
-        self.map_tree = ttk.Treeview(parent, columns=columns, show="headings", height=12)
-        self.map_tree.heading("source", text="Source")
-        self.map_tree.heading("target", text="Target")
-        self.map_tree.heading("count", text="Count")
-        self.map_tree.column("source", width=120, anchor="center")
-        self.map_tree.column("target", width=120, anchor="center")
-        self.map_tree.column("count", width=80, anchor="center")
-        self.map_tree.grid(row=1, column=0, sticky="ew", pady=(8, 8))
+    def add_files(self):
+        paths = filedialog.askopenfilenames(title="Add PNG images", filetypes=PNG_TYPES)
+        if paths:
+            self.session.add_files(Path(path) for path in paths)
+            self.refresh_inputs()
 
-        edit = ttk.Frame(parent)
-        edit.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        edit.columnconfigure(0, weight=1)
-        edit.columnconfigure(1, weight=1)
-        self.edit_source = ttk.Entry(edit)
-        self.edit_target = ttk.Entry(edit)
-        self.edit_source.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.edit_target.grid(row=0, column=1, sticky="ew", padx=(0, 6))
-        ttk.Button(edit, text="Add/Update", command=self.add_mapping).grid(row=0, column=2, padx=(0, 6))
-        ttk.Button(edit, text="Remove", command=self.remove_mapping).grid(row=0, column=3)
-        self.map_tree.bind("<<TreeviewSelect>>", self.load_selected_mapping)
+    def add_folder(self):
+        folder = filedialog.askdirectory(title="Add PNG images from folder")
+        if folder:
+            self.session.add_folder(Path(folder))
+            self.refresh_inputs()
 
-        self.manual_text = tk.Text(parent, height=8, wrap="none", undo=True)
-        self.manual_text.grid(row=3, column=0, sticky="nsew")
-        self.manual_text.insert("1.0", "#FF0000 -> #00FF00\n#0000FF, #111111")
+    def refresh_inputs(self):
+        self.input_list.delete(0, tk.END)
+        for path in self.session.inputs:
+            self.input_list.insert(tk.END, path.name)
+        if self.session.selected_index is not None:
+            self.input_list.selection_set(self.session.selected_index)
+        self.refresh_preview()
 
-        actions = ttk.Frame(parent)
-        actions.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(actions, text="Load Map", command=self.load_map).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Save Map", command=self.save_map).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Checkbutton(actions, text="Use ImageMagick on export", variable=self.use_magick_var).pack(side=tk.LEFT)
-        ttk.Button(actions, text="Preview", command=self.preview_transform).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(actions, text="Export", command=self.export_transform).pack(side=tk.RIGHT)
-        ttk.Button(actions, text="Batch Folder", command=self.batch_transform).pack(side=tk.RIGHT, padx=(0, 6))
+    def select_input(self, _event=None):
+        selected = self.input_list.curselection()
+        if selected:
+            self.session.selected_index = selected[0]
+            self.refresh_preview()
 
-    def _build_preview_panel(self, parent):
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
-
-        ttk.Label(parent, text="Preview").grid(row=0, column=0, sticky="w")
-        self.preview_label = ttk.Label(parent, anchor="center")
-        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(4, 8))
-        ttk.Label(parent, text="Double-click colors to stage manual map entries.").grid(row=2, column=0, sticky="w")
-
-    def pick_source(self):
-        path = filedialog.askopenfilename(title="Pick source image", filetypes=IMAGE_TYPES)
-        if path:
-            self.source_path = Path(path)
-            self.source_var.set(str(self.source_path))
-            self.load_hex_values(self.source_path, self.source_colors)
-            self.show_image_preview(self.source_path)
-            self.status_var.set(f"Loaded source: {self.source_path.name}")
-
-    def pick_target(self):
-        path = filedialog.askopenfilename(title="Pick comparison image", filetypes=IMAGE_TYPES)
-        if path:
-            self.target_path = Path(path)
-            self.target_var.set(str(self.target_path))
-            self.load_hex_values(self.target_path, self.target_colors)
-            self.status_var.set(f"Loaded comparison: {self.target_path.name}")
-
-    def load_hex_values(self, path: Path, listbox: tk.Listbox):
-        listbox.delete(0, tk.END)
-        for color in extract_hex_values(path):
-            listbox.insert(tk.END, color)
-
-    def compare_pixels(self):
-        if not self.require_two_images():
+    def change_input(self, offset):
+        if self.session.selected_index is None:
             return
-        suggested = build_color_map(self.source_path, self.target_path)
-        self.replace_tree(flatten_suggested_map(suggested), suggested)
-        self.status_var.set(f"Mapped {len(suggested)} colors by aligned pixels.")
+        index = self.session.selected_index + offset
+        if 0 <= index < len(self.session.inputs):
+            self.session.selected_index = index
+            self.input_list.selection_clear(0, tk.END)
+            self.input_list.selection_set(index)
+            self.refresh_preview()
 
-    def compare_cells(self):
-        if not self.require_two_images():
+    def refresh_preview(self):
+        if self.session.selected_index is None:
             return
+        source_path = self.session.inputs[self.session.selected_index]
         try:
-            frame_width = int(self.frame_width_var.get())
-            frame_height = int(self.frame_height_var.get())
-            suggested = build_cell_color_map(self.source_path, self.target_path, frame_width, frame_height)
-        except ValueError as exc:
-            messagebox.showerror("Invalid frame size", str(exc))
-            return
-        self.replace_tree(flatten_suggested_map(suggested), suggested)
-        self.status_var.set(f"Mapped {len(suggested)} colors by {frame_width}x{frame_height} cells.")
+            with Image.open(source_path) as source:
+                before = source.convert("RGBA")
+            after = self.session.preview()
+            self.before_image = self.to_photo(before)
+            self.after_image = self.to_photo(after)
+            self.before_label.configure(image=self.before_image)
+            self.after_label.configure(image=self.after_image)
+            self.status_var.set(f"Previewing {source_path.name}")
+        except (OSError, ValueError) as exc:
+            self.status_var.set(str(exc))
 
-    def apply_manual_text(self):
-        try:
-            mappings = parse_manual_map(self.manual_text.get("1.0", tk.END))
-        except ValueError as exc:
-            messagebox.showerror("Invalid manual map", str(exc))
-            return
-        self.replace_tree(mappings)
-        self.status_var.set(f"Loaded {len(mappings)} manual mappings.")
+    @staticmethod
+    def to_photo(image):
+        preview = image.copy()
+        preview.thumbnail((340, 340), Image.Resampling.NEAREST)
+        return ImageTk.PhotoImage(preview)
 
-    def add_mapping(self):
-        source = self.edit_source.get().strip()
-        target = self.edit_target.get().strip()
-        try:
-            mapping = parse_manual_map(f"{source} {target}")
-        except ValueError as exc:
-            messagebox.showerror("Invalid mapping", str(exc))
-            return
-        current = self.current_map()
-        current.update(mapping)
-        self.replace_tree(current)
+    def add_recolor(self):
+        self.session.recipe = Recipe((*self.session.recipe.operations, RecolorOperation("Recolor", {})))
+        self.refresh_recipe(select_bottom=True)
 
-    def remove_mapping(self):
-        selected = self.map_tree.selection()
-        if not selected:
-            return
-        for item in selected:
-            self.map_tree.delete(item)
-
-    def load_selected_mapping(self, _event=None):
-        selected = self.map_tree.selection()
-        if not selected:
-            return
-        values = self.map_tree.item(selected[0], "values")
-        self.edit_source.delete(0, tk.END)
-        self.edit_target.delete(0, tk.END)
-        self.edit_source.insert(0, values[0])
-        self.edit_target.insert(0, values[1])
-
-    def insert_selected_source(self):
-        self._insert_selected_color(self.source_colors, self.edit_source)
-
-    def insert_selected_target(self):
-        self._insert_selected_color(self.target_colors, self.edit_target)
-
-    def _insert_selected_color(self, listbox: tk.Listbox, entry: ttk.Entry):
-        selection = listbox.curselection()
-        if not selection:
-            return
-        entry.delete(0, tk.END)
-        entry.insert(0, listbox.get(selection[0]))
-
-    def replace_tree(self, mappings: dict[str, str], suggested: dict[str, dict[str, int | str]] | None = None):
-        for item in self.map_tree.get_children():
-            self.map_tree.delete(item)
-        for source, target in sorted(mappings.items()):
-            count = ""
-            if suggested and source in suggested:
-                count = suggested[source].get("count", "")
-            self.map_tree.insert("", tk.END, values=(source, target, count))
-
-    def current_map(self) -> dict[str, str]:
-        mappings = {}
-        for item in self.map_tree.get_children():
-            source, target, _count = self.map_tree.item(item, "values")
-            mappings[source] = target
-        return mappings
-
-    def preview_transform(self):
-        if not self.require_source_and_map():
-            return
-        preview_path = Path(tempfile.gettempdir()) / "imageination_preview.png"
-        apply_color_map(self.source_path, preview_path, self.current_map(), use_imagemagick=False)
-        self.show_image_preview(preview_path)
-        self.last_output_path = preview_path
-        self.status_var.set("Preview updated.")
-
-    def export_transform(self):
-        if not self.require_source_and_map():
-            return
-        default_name = f"{self.source_path.stem}_imageinated{self.source_path.suffix}"
-        path = filedialog.asksaveasfilename(
-            title="Export transformed image",
-            initialfile=default_name,
-            defaultextension=self.source_path.suffix,
-            filetypes=IMAGE_TYPES,
-        )
+    def add_layer(self):
+        path = filedialog.askopenfilename(title="Choose same-size PNG layer", filetypes=PNG_TYPES)
         if not path:
             return
-        output_path = apply_color_map(
-            self.source_path,
-            path,
-            self.current_map(),
-            use_imagemagick=self.use_magick_var.get(),
-        )
-        self.show_image_preview(output_path)
-        self.last_output_path = output_path
-        self.status_var.set(f"Exported: {output_path}")
+        try:
+            operation = layer_from_png(path, name=Path(path).stem, direction=self.direction_var.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid layer", str(exc))
+            return
+        self.session.recipe = Recipe((*self.session.recipe.operations, operation))
+        self.refresh_recipe(select_bottom=True)
 
-    def batch_transform(self):
-        if not self.current_map():
-            messagebox.showinfo("Map needed", "Create or enter at least one transform mapping first.")
-            return
-        input_dir = filedialog.askdirectory(title="Pick folder of images to transform")
-        if not input_dir:
-            return
-        output_dir = filedialog.askdirectory(title="Pick output folder")
-        if not output_dir:
-            return
-        outputs = apply_color_map_batch(
-            input_dir,
-            output_dir,
-            self.current_map(),
-            use_imagemagick=self.use_magick_var.get(),
-        )
-        if outputs:
-            self.show_image_preview(outputs[0])
-        self.status_var.set(f"Batch exported {len(outputs)} image(s) to {output_dir}.")
+    def refresh_recipe(self, select_bottom=False):
+        self.recipe_list.delete(0, tk.END)
+        for operation in reversed(self.session.recipe.operations):
+            state = "✓" if operation.enabled else "○"
+            self.recipe_list.insert(tk.END, f"{state} {operation.name}")
+        if self.session.recipe.operations:
+            selected = len(self.session.recipe.operations) - 1 if select_bottom else 0
+            self.recipe_list.selection_set(selected)
+        self.select_operation()
+        self.refresh_preview()
 
-    def load_map(self):
-        path = filedialog.askopenfilename(title="Load transform map", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+    def selected_operation_index(self):
+        selected = self.recipe_list.curselection()
+        return len(self.session.recipe.operations) - 1 - selected[0] if selected else None
+
+    def select_operation(self, _event=None):
+        for child in self.editor.winfo_children():
+            child.destroy()
+        index = self.selected_operation_index()
+        if index is None:
+            return
+        operation = self.session.recipe.operations[index]
+        if isinstance(operation, RecolorOperation):
+            self.show_recolor_editor(index, operation)
+        else:
+            ttk.Label(self.editor, text=f"{operation.direction.title()} layer · {operation.width}×{operation.height}px").pack(anchor="w")
+            ttk.Radiobutton(self.editor, text="Above", variable=self.direction_var, value="above", command=lambda: self.set_layer_direction(index, "above")).pack(anchor="w")
+            ttk.Radiobutton(self.editor, text="Behind", variable=self.direction_var, value="behind", command=lambda: self.set_layer_direction(index, "behind")).pack(anchor="w")
+            self.direction_var.set(operation.direction)
+
+    def show_recolor_editor(self, index, operation):
+        source = ttk.Entry(self.editor)
+        target = ttk.Entry(self.editor)
+        source.pack(fill="x", pady=2)
+        target.pack(fill="x", pady=2)
+        mapping_list = tk.Listbox(self.editor, height=5)
+        mapping_list.pack(fill="x", pady=3)
+        for old, new in sorted(operation.mappings.items()):
+            mapping_list.insert(tk.END, f"{old} → {new}")
+        def update_mapping():
+            try:
+                mappings = dict(operation.mappings)
+                mappings[source.get()] = target.get()
+                self.session.replace_operation(index, RecolorOperation(operation.name, mappings, operation.enabled))
+                self.refresh_recipe()
+            except ValueError as exc:
+                messagebox.showerror("Invalid color", str(exc))
+        ttk.Button(self.editor, text="Add / Update mapping", command=update_mapping).pack(fill="x", pady=2)
+        ttk.Button(self.editor, text="Import from reference", command=lambda: self.import_reference(index, operation)).pack(fill="x", pady=2)
+
+    def import_reference(self, index, operation):
+        if self.session.selected_index is None:
+            messagebox.showinfo("Input needed", "Select an input image first.")
+            return
+        path = filedialog.askopenfilename(title="Choose matching reference PNG", filetypes=PNG_TYPES)
         if not path:
             return
-        with open(path, "r", encoding="utf-8") as file:
-            payload = json.load(file)
-        mappings = payload.get("mappings", payload)
-        self.replace_tree({str(source): str(target) for source, target in mappings.items()})
-        self.status_var.set(f"Loaded map: {path}")
+        try:
+            with Image.open(self.session.inputs[self.session.selected_index]) as source, Image.open(path) as reference:
+                mappings = suggest_mappings(source, reference)
+            self.session.replace_operation(index, RecolorOperation(operation.name, mappings, operation.enabled))
+            self.refresh_recipe()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Reference comparison failed", str(exc))
 
-    def save_map(self):
-        path = filedialog.asksaveasfilename(
-            title="Save transform map",
-            initialfile="imageination-map.json",
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
-        )
+    def set_layer_direction(self, index, direction):
+        operation = self.session.recipe.operations[index]
+        self.session.replace_operation(index, replace(operation, direction=direction))
+        self.refresh_recipe()
+
+    def move_operation(self, offset):
+        index = self.selected_operation_index()
+        if index is not None:
+            self.session.move_operation(index, offset)
+            self.refresh_recipe()
+
+    def toggle_operation(self):
+        index = self.selected_operation_index()
+        if index is not None:
+            operation = self.session.recipe.operations[index]
+            self.session.replace_operation(index, replace(operation, enabled=not operation.enabled))
+            self.refresh_recipe()
+
+    def remove_operation(self):
+        index = self.selected_operation_index()
+        if index is not None:
+            operations = list(self.session.recipe.operations)
+            operations.pop(index)
+            self.session.recipe = Recipe(tuple(operations))
+            self.refresh_recipe()
+
+    def load_recipe(self):
+        path = filedialog.askopenfilename(title="Load recipe", filetypes=[("Imageination recipe", "*.json")])
         if not path:
             return
-        payload = {"mappings": self.current_map()}
-        with open(path, "w", encoding="utf-8") as file:
-            json.dump(payload, file, indent=2)
-        self.status_var.set(f"Saved map: {path}")
+        try:
+            self.session.replace_recipe(recipe_from_json(Path(path).read_text(encoding="utf-8")))
+            self.refresh_recipe()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Could not load recipe", str(exc))
 
-    def show_image_preview(self, path: Path):
-        with Image.open(path).convert("RGBA") as image:
-            image.thumbnail((320, 320))
-            self.preview_image = ImageTk.PhotoImage(image)
-        self.preview_label.configure(image=self.preview_image)
-
-    def require_two_images(self) -> bool:
-        if not self.source_path or not self.target_path:
-            messagebox.showinfo("Images needed", "Pick both a source image and a comparison image first.")
-            return False
-        return True
-
-    def require_source_and_map(self) -> bool:
-        if not self.source_path:
-            messagebox.showinfo("Source needed", "Pick a source image first.")
-            return False
-        if not self.current_map():
-            messagebox.showinfo("Map needed", "Create or enter at least one transform mapping first.")
-            return False
-        return True
+    def export_results(self):
+        if not self.session.inputs:
+            messagebox.showinfo("Inputs needed", "Add one or more PNG images first.")
+            return
+        folder = filedialog.askdirectory(title="Choose export folder")
+        if not folder:
+            return
+        output = Path(folder)
+        overwrite = False
+        issues = preflight(self.session.inputs, self.session.recipe, output)
+        if any(issue.message.startswith("Output already exists") for issue in issues):
+            overwrite = messagebox.askyesno("Existing outputs", "Some output names already exist. Overwrite them?")
+            issues = preflight(self.session.inputs, self.session.recipe, output, overwrite=overwrite)
+        if issues:
+            messagebox.showerror("Export blocked", "\n".join(issue.message for issue in issues))
+            return
+        try:
+            outputs = export_recipe(self.session.inputs, self.session.recipe, output, include_recipe=messagebox.askyesno("Include recipe", "Include imageination-recipe.json?"), overwrite=overwrite)
+            self.status_var.set(f"Exported {len(outputs)} PNG image(s) to {output}")
+        except ValueError as exc:
+            messagebox.showerror("Export failed", str(exc))
 
 
 def main():
-    app = ImageinationApp()
-    app.mainloop()
+    ImageinationApp().mainloop()
 
 
 if __name__ == "__main__":

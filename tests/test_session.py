@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from imageination.recipe import Recipe
+from imageination.recipe import Recipe, RecolorOperation
 from imageination.session import RecipeSession
 
 
@@ -27,3 +27,14 @@ def test_session_add_folder_uses_only_top_level_pngs(tmp_path):
 
 def test_session_preview_is_none_without_selected_input():
     assert RecipeSession(recipe=Recipe()).preview() is None
+
+
+def test_session_reorders_and_disables_operations():
+    red = RecolorOperation("Red", {"#FF0000": "#00FF00"})
+    blue = RecolorOperation("Blue", {"#0000FF": "#FFFFFF"})
+    session = RecipeSession(recipe=Recipe((red, blue)))
+
+    session.move_operation(0, 1)
+    session.replace_operation(0, RecolorOperation("Blue", blue.mappings, enabled=False))
+
+    assert session.recipe.operations == (RecolorOperation("Blue", blue.mappings, enabled=False), red)
