@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from imageination.core import image_data
-from imageination.engine import apply_recipe, suggest_mappings
+from imageination.engine import apply_recipe, export_recipe, preflight, suggest_mappings
 from imageination.recipe import LayerOperation, Recipe, RecolorOperation
 
 
@@ -49,3 +49,28 @@ def test_suggest_mappings_requires_equal_dimensions_and_returns_winners():
     assert suggest_mappings(source, reference) == {"#FF0000": "#00FF00"}
     with pytest.raises(ValueError, match="same dimensions"):
         suggest_mappings(source, image_from_pixels([(0, 0, 0, 255)], (1, 1)))
+
+
+def test_preflight_blocks_mismatched_inputs_before_export(tmp_path):
+    source = tmp_path / "source.png"
+    output = tmp_path / "output"
+    image_from_pixels([(1, 2, 3, 255)], (1, 1)).save(source)
+    recipe = Recipe((layer_operation("Ring", "above", [(0, 0, 0, 0)] * 2, (2, 1)),))
+
+    issues = preflight([source], recipe, output)
+
+    assert [issue.message for issue in issues] == ["Layer 'Ring' expected 1x1; got 2x1."]
+    assert not output.exists()
+
+
+def test_export_writes_pngs_and_optional_recipe_without_touching_input(tmp_path):
+    source = tmp_path / "source.png"
+    output = tmp_path / "skin"
+    image_from_pixels([(255, 0, 0, 255)], (1, 1)).save(source)
+    recipe = Recipe((RecolorOperation("Blue", {"#FF0000": "#0000FF"}),))
+
+    written = export_recipe([source], recipe, output, include_recipe=True, overwrite=False)
+
+    assert written == [output / "source.png"]
+    assert (output / "imageination-recipe.json").exists()
+    assert source.read_bytes() != (output / "source.png").read_bytes()
