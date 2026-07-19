@@ -4,9 +4,23 @@ Imageination is a small local PNG batch workbench. Build a simple image recipe, 
 
 ## Run
 
+Clone the repository and enter its root directory:
+
+```bash
+git clone https://github.com/AllHailSeizure/Imageination.git
+cd Imageination
+```
+
+On Windows PowerShell:
+
 ```powershell
-cd D:\Libraries\Imageination
 python .\run_imageination.py
+```
+
+On macOS or Linux:
+
+```bash
+python3 ./run_imageination.py
 ```
 
 ## Workflow
@@ -20,6 +34,8 @@ python .\run_imageination.py
 Recipes contain only the operations. Imageination does not save projects, input folders, output folders, or recipe history. Embedded layer data keeps an exported recipe self-contained.
 
 ## Test
+
+From the repository root:
 
 ```powershell
 python -m pytest tests -v
