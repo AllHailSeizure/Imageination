@@ -1,6 +1,6 @@
 # Imageination
 
-A small local GUI tool for extracting image hex colors, comparing two images, building color transform maps, editing those maps manually, and exporting transformed images with ImageMagick.
+Imageination is a small local PNG batch workbench. Build a simple image recipe, preview it against any input, and export transformed copies without touching the originals.
 
 ## Run
 
@@ -9,31 +9,18 @@ cd D:\Libraries\Imageination
 python .\run_imageination.py
 ```
 
-## Current workflow
+## Workflow
 
-1. Pick a source image.
-2. Pick a comparison image.
-3. Use `Compare Pixels` to map aligned source colors to comparison colors.
-4. Or enter a frame size and use `Compare Cells` to map dominant colors per frame/cell.
-5. Double-click extracted colors or type mappings manually, such as:
+1. Add individual PNGs or every top-level PNG from a folder.
+2. Add a recolor operation manually, or generate its mappings from a same-size reference image.
+3. Add transparent PNG layers above or behind the current image. Layers must match the input size exactly.
+4. Preview inputs and reorder, disable, or remove recipe operations as needed.
+5. Export transformed copies to a separate folder. Optionally include a portable `imageination-recipe.json` alongside them.
 
-```text
-#FF0000 -> #00FF00
-#0000FF, #111111
-```
-
-6. Preview or export the transformed source image.
-
-## Notes
-
-- ImageMagick is used for export when the checkbox is enabled.
-- Preview uses the built-in Pillow path so it is fast and local.
-- Transform maps can be saved and loaded as JSON.
-- Future work: batch layering, spritesheet frame layering, and per-frame nudging.
+Recipes contain only the operations. Imageination does not save projects, input folders, output folders, or recipe history. Embedded layer data keeps an exported recipe self-contained.
 
 ## Test
 
 ```powershell
-cd D:\Libraries\Imageination
-python -m pytest tests
+python -m pytest tests -v
 ```
